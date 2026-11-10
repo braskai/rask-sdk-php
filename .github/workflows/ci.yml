@@ -1,0 +1,56 @@
+# Build, lint and test. Nothing here publishes.
+name: CI
+
+on:
+  push:
+    branches: [main, initial]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+      - run: composer validate --strict --no-check-version
+      - run: composer install --no-interaction --no-progress
+      - name: Syntax
+        run: find src tools tests examples -name '*.php' -print0 | xargs -0 -n 1 -P 8 php -l > /dev/null
+      - name: Generated files match the contract
+        run: php tools/generate.php --check
+      - run: vendor/bin/phpstan analyse --no-progress --memory-limit=2G
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # The shared acceptance harness is its own repository.
+      - uses: actions/checkout@v4
+        with:
+          repository: braskai/rask-sdk-acceptance
+          path: .harness
+      - run: composer install --no-interaction --no-progress
+      - name: Start the harness
+        run: |
+          node .harness/bin/rask-sdk-acceptance.mjs &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4010/__control/health > /dev/null && exit 0; sleep 1; done
+          exit 1
+      - run: vendor/bin/phpunit --no-progress

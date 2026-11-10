@@ -1,0 +1,9 @@
+parameters:
+    level: max
+    tmpDir: .phpstan-cache
+    paths:
+        - src
+        - examples
+    treatPhpDocTypesAsCertain: false
+    additionalConstructors:
+        - Rask\Sdk\Rask::initResources
