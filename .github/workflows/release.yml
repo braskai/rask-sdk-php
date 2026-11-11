@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # the tag and the GitHub Release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Only from the default branch
         env:
@@ -38,6 +40,7 @@ jobs:
         with:
           persist-credentials: false
       - name: The version is new
+        id: version
         run: |
           version=$(jq -r .version composer.json)
           tagged=0
@@ -47,6 +50,7 @@ jobs:
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Tag the version and make the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -55,8 +59,16 @@ jobs:
           set -- "v$VERSION" --target "$GITHUB_SHA" --generate-notes
           case "$VERSION" in *-*) set -- "$@" --prerelease ;; esac
           gh release create "$@"
+
+  # A job of its own, so that it can be run again by itself: a second run of the job above stops at the tag it made.
+  packagist:
+    name: Packagist has the version
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
       # Packagist hears of the tag from GitHub and needs a moment to read it.
-      - name: Packagist has the version
+      - env:
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
           for _ in $(seq 1 20); do
             if curl -fsS --max-time 20 https://repo.packagist.org/p2/braskai/rask-sdk.json | jq -e --arg version "$VERSION" '.packages["braskai/rask-sdk"] | any((.version | ltrimstr("v")) == $version)' > /dev/null; then
