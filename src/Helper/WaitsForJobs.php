@@ -38,8 +38,9 @@ trait WaitsForJobs
         $etag = null;
         $last = null;
         while (true) {
-            // Long-poll for 20 s, except where that would hold the request past the deadline.
-            $hold = min(20, max(0, (int) ceil($deadline - $this->transport->now())));
+            // Long-poll for 20 s, except where that would hold the request past the deadline. Capped while it is a
+            // float: the time left under a timeout such as INF does not convert to an int.
+            $hold = (int) min(20, max(0, ceil($deadline - $this->transport->now())));
             $delay = 1.0;
             try {
                 $job = $this->getJob($jobId, ['wait_seconds' => $hold], $etag === null ? [] : ['if_none_match' => $etag]);
@@ -60,6 +61,11 @@ trait WaitsForJobs
                 }
                 $delay = (float) ($response?->retryAfter() ?? 1);
             } catch (RaskError $error) {
+                // The job's own end is no outage, whatever status its problem carries: a finished job answers the same
+                // on every poll.
+                if ($error instanceof JobFailedError || $error instanceof JobCanceledError) {
+                    throw $error;
+                }
                 // Transport spent its 120 s budget on an outage. A wait of hours outlives that.
                 if (!$error instanceof ConnectionError && !in_array($error->status, Transport::RETRY_STATUSES, true)) {
                     throw $error;

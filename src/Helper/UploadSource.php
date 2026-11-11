@@ -10,8 +10,8 @@ use Psr\Http\Message\StreamInterface;
 use Rask\Sdk\Exception\UsageError;
 
 /**
- * What uploads->uploadFile() takes, as a rewindable stream of known size. A whole-file retry needs both, so a pipe or a
- * socket is spooled to a temp file first.
+ * What uploads->uploadFile() takes, as a rewindable stream of known size. A whole-file retry needs both, so a pipe, a
+ * socket or any other stream that does not go back to its start is spooled to a temp file first.
  *
  * @internal
  */
@@ -93,7 +93,7 @@ final class UploadSource
 
     private static function measured(StreamInterface $stream, string $filename, string $contentType, bool $ownsStream, bool $ownsResource): self
     {
-        if (!$stream->isSeekable()) {
+        if (!self::rewinds($stream)) {
             $spool = Utils::streamFor(fopen('php://temp/maxmemory:8388608', 'r+b'));
             Utils::copyToStream($stream, $spool);
             if ($ownsStream && !$ownsResource) {
@@ -117,6 +117,24 @@ final class UploadSource
             throw new UsageError("uploadFile: $filename is empty.");
         }
         return new self($stream, $size, $filename, $contentType, $ownsStream, $ownsResource);
+    }
+
+    /**
+     * A stream may say it seeks and then fail to: PHP says so of every stream of a user-space wrapper, whether or not
+     * the wrapper can seek. Such a stream is spooled like a pipe, and nothing has been read from it by then.
+     */
+    private static function rewinds(StreamInterface $stream): bool
+    {
+        if (!$stream->isSeekable()) {
+            return false;
+        }
+        try {
+            // PHP warns of the seek that fails before the stream raises.
+            @$stream->rewind();
+            return true;
+        } catch (\RuntimeException) {
+            return false;
+        }
     }
 
     /** @param array<string, mixed> $params */

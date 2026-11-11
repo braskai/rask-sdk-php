@@ -62,7 +62,11 @@ try {
     // Download. Output URLs are presigned: no key goes with them.
     foreach ($rask->exports->listProjectOutputs((string) $processed->project_id) as $output) {
         if ($output->kind === OutputKind::DUBBED_VIDEO && $output->url !== null) {
-            copy($output->url, 'dubbed.mp4');
+            // copy() answers false when storage refuses, as it does once the URL has expired.
+            if (!copy($output->url, 'dubbed.mp4')) {
+                echo "The download failed.\n";
+                exit(1);
+            }
             echo "Saved dubbed.mp4\n";
         }
     }

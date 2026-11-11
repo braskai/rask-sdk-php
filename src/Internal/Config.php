@@ -87,7 +87,11 @@ final class Config
             $onDeprecation === null ? null : \Closure::fromCallable($onDeprecation),
             $sleeper === null
                 ? static function (int|float $seconds): void {
-                    usleep((int) round($seconds * 1_000_000));
+                    // usleep() takes its microseconds as 32 bits: a wait past 71 minutes would wrap round into a
+                    // short one.
+                    $whole = (int) floor($seconds);
+                    sleep($whole);
+                    usleep((int) round(($seconds - $whole) * 1_000_000));
                 }
                 : \Closure::fromCallable($sleeper),
             $clock === null ? static fn (): float => hrtime(true) / 1e9 : \Closure::fromCallable($clock),
