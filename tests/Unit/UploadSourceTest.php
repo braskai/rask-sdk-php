@@ -149,6 +149,10 @@ final class UploadSourceTest extends TestCase
             } catch (UsageError $error) {
                 $this->assertStringContainsString('already been read from', $error->getMessage());
             }
+            // A refusal leaves the caller's stream open and where it was.
+            unset($error);
+            $this->assertTrue(is_resource($stream));
+            $this->assertSame('tes', fread($stream, 8));
             fclose($stream);
         } finally {
             stream_wrapper_unregister('rask-unseekable');

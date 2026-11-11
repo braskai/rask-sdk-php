@@ -93,7 +93,16 @@ final class UploadSource
 
     private static function measured(StreamInterface $stream, string $filename, string $contentType, bool $ownsStream, bool $ownsResource): self
     {
-        if (!self::rewinds($stream)) {
+        try {
+            $rewinds = self::rewinds($stream);
+        } catch (UsageError $error) {
+            // Let go of the caller's resource first: the wrapper made here closes what it holds when it is dropped.
+            if ($ownsStream && !$ownsResource) {
+                $stream->detach();
+            }
+            throw $error;
+        }
+        if (!$rewinds) {
             $spool = Utils::streamFor(fopen('php://temp/maxmemory:8388608', 'r+b'));
             Utils::copyToStream($stream, $spool);
             if ($ownsStream && !$ownsResource) {
