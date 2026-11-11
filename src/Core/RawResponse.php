@@ -11,9 +11,10 @@ final class RawResponse
 {
     /**
      * 2^31 s, what HTTP takes for a number of seconds too large to hold (RFC 9111, 1.2.2): about 68 years, so a time
-     * or another wait can still be added to it.
+     * or another wait can still be added to it. Where an int has 32 bits it does not hold 2^31, and the cap is the
+     * largest int.
      */
-    private const MAX_RETRY_AFTER = 2147483648;
+    private const MAX_RETRY_AFTER = PHP_INT_SIZE > 4 ? 2147483648 : PHP_INT_MAX;
 
     public readonly ?string $request_id;
 

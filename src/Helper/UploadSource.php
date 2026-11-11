@@ -121,7 +121,8 @@ final class UploadSource
 
     /**
      * A stream may say it seeks and then fail to: PHP says so of every stream of a user-space wrapper, whether or not
-     * the wrapper can seek. Such a stream is spooled like a pipe, and nothing has been read from it by then.
+     * the wrapper can seek. Such a stream is spooled like a pipe, as long as nothing has been read from it: one that
+     * has been read from cannot be sent from its start, and what is left of it would pass for the whole file.
      */
     private static function rewinds(StreamInterface $stream): bool
     {
@@ -133,6 +134,15 @@ final class UploadSource
             @$stream->rewind();
             return true;
         } catch (\RuntimeException) {
+            try {
+                $read = $stream->tell();
+            } catch (\RuntimeException) {
+                // A stream that cannot say where it is gets the benefit of the doubt, like a pipe.
+                $read = 0;
+            }
+            if ($read > 0) {
+                throw new UsageError('The stream does not go back to its start and has already been read from, so it cannot be uploaded whole.');
+            }
             return false;
         }
     }

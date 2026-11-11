@@ -136,6 +136,25 @@ final class UploadSourceTest extends TestCase
         }
     }
 
+    /** Spooled from where it stands, such a stream would upload a file without its beginning, and say nothing. */
+    public function testAStreamThatCannotGoBackAndWasReadFromIsRefused(): void
+    {
+        stream_wrapper_register('rask-unseekable', UnseekableStreamWrapper::class);
+        try {
+            $stream = fopen('rask-unseekable://bytes', 'rb');
+            $this->assertSame('by', fread($stream, 2));
+            try {
+                UploadSource::from($stream, ['filename' => 'a.mp4', 'content_type' => 'video/mp4']);
+                $this->fail('A stream without its first bytes was taken.');
+            } catch (UsageError $error) {
+                $this->assertStringContainsString('already been read from', $error->getMessage());
+            }
+            fclose($stream);
+        } finally {
+            stream_wrapper_unregister('rask-unseekable');
+        }
+    }
+
     /** The same from a PSR-7 stream, through a whole upload: storage fails the first PUT and gets the file again. */
     public function testAPsr7StreamThatSaysItSeeksAndCannotIsSentWholeOnEveryAttempt(): void
     {
