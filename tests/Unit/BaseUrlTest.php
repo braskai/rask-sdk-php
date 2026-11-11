@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Rask\Sdk\Tests\Unit;
 
 use GuzzleHttp\Psr7\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Rask\Sdk\Exception\RaskError;
+use Rask\Sdk\Exception\UnexpectedResponseError;
 use Rask\Sdk\Internal\Operations;
 use Rask\Sdk\Tests\Acceptance\ScenarioRunner;
 
@@ -88,6 +91,34 @@ final class BaseUrlTest extends TestCase
         $http = new FakeHttpClient([new Response(302, ['Location' => 'file:///etc/passwd'])]);
         $this->expectException(\Rask\Sdk\Exception\UnexpectedResponseError::class);
         $http->client()->account->getMe();
+    }
+
+    /** @return iterable<string, array{string}> */
+    public static function locationsNoUrlCanBeMadeOf(): iterable
+    {
+        yield 'a bracket that never closes' => ['http://['];
+        yield 'a scheme and nothing else' => ['http://'];
+        yield 'a port out of range' => ['http://gw.example.com:99999/x'];
+        // These two parse. Guzzle then refuses to send them, with the exception it has for a failure of the network.
+        yield 'a path and no host' => ['http:/x'];
+        yield 'a scheme alone' => ['https:'];
+    }
+
+    /** Asking again would get the same Location, so the redirect is the answer: no connection error, and no retry. */
+    #[DataProvider('locationsNoUrlCanBeMadeOf')]
+    public function testARedirectWhoseLocationIsNoUrlIsRefusedWithoutARetry(string $location): void
+    {
+        $http = new FakeHttpClient(array_fill(0, 3, new Response(307, ['Location' => $location])));
+        try {
+            $http->client([], $sleeps)->account->getMe();
+            $this->fail('Must raise.');
+        } catch (RaskError $e) {
+            $this->assertInstanceOf(UnexpectedResponseError::class, $e);
+            $this->assertSame(307, $e->status);
+            $this->assertStringNotContainsString($location, $e->getMessage());
+        }
+        $this->assertCount(1, $http->requests);
+        $this->assertSame([], $sleeps);
     }
 
     public function testRedirectLoopEnds(): void

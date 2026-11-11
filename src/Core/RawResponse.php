@@ -9,6 +9,12 @@ use Rask\Sdk\Exception\UnexpectedResponseError;
 /** The HTTP response behind a result or an error: no second call needed to read a status or a header. */
 final class RawResponse
 {
+    /**
+     * 2^31 s, what HTTP takes for a number of seconds too large to hold (RFC 9111, 1.2.2): about 68 years, so a time
+     * or another wait can still be added to it.
+     */
+    private const MAX_RETRY_AFTER = 2147483648;
+
     public readonly ?string $request_id;
 
     /**
@@ -45,18 +51,24 @@ final class RawResponse
         return $this->header('idempotent-replayed') === 'true';
     }
 
-    /** Seconds from Retry-After, as a number or an HTTP date. */
+    /**
+     * Seconds from Retry-After, as a number or an HTTP date: at most 2^31, and null when it is absent, unreadable or
+     * negative.
+     */
     public function retryAfter(): ?int
     {
         $value = $this->header('retry-after');
         if ($value === null) {
             return null;
         }
-        if (ctype_digit($value)) {
-            return (int) $value;
+        if (is_numeric($value)) {
+            // A number never reaches strtotime(), which reads "-5" as a time zone and answers five hours from now.
+            $seconds = (float) $value;
+            // Capped while it is a float: one beyond an int does not convert to it.
+            return $seconds < 0 ? null : (int) min(ceil($seconds), self::MAX_RETRY_AFTER);
         }
         $time = strtotime($value);
-        return $time === false ? null : max(0, $time - time());
+        return $time === false ? null : min(max(0, $time - time()), self::MAX_RETRY_AFTER);
     }
 
     /**

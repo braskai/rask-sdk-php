@@ -29,9 +29,9 @@ use Rask\Sdk\Exception\UsageError;
 final class Transport
 {
     public const RETRY_STATUSES = [429, 502, 503, 504];
+    public const BUDGET_SECONDS = 120.0;
 
     private const OPTION_NAMES = ['if_match', 'if_none_match', 'idempotency_key'];
-    private const BUDGET_SECONDS = 120.0;
     private const MAX_KEY_IN_USE_RETRIES = 3;
     private const MAX_REDIRECTS = 5;
 
@@ -210,9 +210,16 @@ final class Transport
             if (++$hops > self::MAX_REDIRECTS) {
                 throw new UnexpectedResponseError('Too many redirects.', $response->status, null, $response, $key);
             }
-            $target = UriResolver::resolve(new Uri($url), new Uri($location));
-            if (!in_array($target->getScheme(), ['http', 'https'], true)) {
-                throw new UnexpectedResponseError('A redirect to a URL that is not http or https was refused.', $response->status, null, $response, $key);
+            try {
+                $target = UriResolver::resolve(new Uri($url), new Uri($location));
+            } catch (\InvalidArgumentException) {
+                // No URL can be made of this Location, and the parser's message would quote it.
+                $target = null;
+            }
+            // Sent on, a URL without a host fails inside the client and is taken for a failure of the network. The next
+            // attempt would get the same Location, so the redirect is the answer.
+            if ($target === null || !in_array($target->getScheme(), ['http', 'https'], true) || $target->getHost() === '') {
+                throw new UnexpectedResponseError('A redirect to a Location that is not an http or https URL was refused.', $response->status, null, $response, $key);
             }
             if (!self::sameOrigin($origin, $target) || !$this->underBasePath($target)) {
                 $authorize = false;

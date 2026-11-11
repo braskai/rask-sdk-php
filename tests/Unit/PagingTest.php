@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Rask\Sdk\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use Rask\Sdk\Exception\UnexpectedResponseError;
 use Rask\Sdk\Model\Project;
 
 final class PagingTest extends TestCase
@@ -44,6 +45,45 @@ final class PagingTest extends TestCase
     {
         $http = new FakeHttpClient([self::page(['a'], 'c2'), self::page(['b'], null)]);
         $this->assertCount(2, iterator_to_array($http->client()->projects->listProjects()));
+    }
+
+    /**
+     * Walks a list whose cursors come in the given order, and returns the ids seen before the walk raised.
+     *
+     * @param list<string> $cursors the next_cursor of page 1, of page 2 and so on
+     * @return list<string|null>
+     */
+    private function walkUntilItRaises(array $cursors): array
+    {
+        $pages = [];
+        foreach ($cursors as $index => $cursor) {
+            $pages[] = self::page(['p' . ($index + 1)], $cursor);
+        }
+        // Past the queue the fake answers a page without a cursor, so a walk that follows the cursors still ends.
+        $http = new FakeHttpClient($pages);
+        $ids = [];
+        try {
+            foreach ($http->client()->projects->listProjects() as $project) {
+                $ids[] = $project->id;
+            }
+            $this->fail('The walk followed a cursor it had already been given.');
+        } catch (UnexpectedResponseError $e) {
+            $this->assertStringContainsString('cursor', $e->getMessage());
+            $this->assertSame(200, $e->status);
+        }
+        $this->assertCount(count($ids), $http->requests);
+        return $ids;
+    }
+
+    public function testACursorGivenTwiceInARowEndsTheWalkWithAnError(): void
+    {
+        $this->assertSame(['p1', 'p2'], $this->walkUntilItRaises(['c2', 'c2', 'c2', 'c2', 'c2']));
+    }
+
+    /** A cycle repeats a cursor too, though never twice in a row. */
+    public function testACursorCycleEndsTheWalkWithAnError(): void
+    {
+        $this->assertSame(['p1', 'p2', 'p3'], $this->walkUntilItRaises(['a', 'b', 'a', 'b', 'a', 'b']));
     }
 
     public function testPageLevelAccess(): void
