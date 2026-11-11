@@ -3,7 +3,7 @@
 The Rask API v3 from PHP 8.2 or newer: all 82 operations, grouped by resource and named after their `operationId`, plus
 retries, idempotency keys, auto-paging, `jobs->wait()` and `uploads->uploadFile()`.
 
-Version 3.0.0-alpha.0, not published yet.
+Version 3.0.0-alpha.0, on [Packagist](https://packagist.org/packages/braskai/rask-sdk).
 
 ## Install
 
