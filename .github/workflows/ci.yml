@@ -1,10 +1,11 @@
-# Build, lint and test. Nothing here publishes.
+# Build, lint and test. Nothing here publishes: release.yml calls this for a release.
 name: CI
 
 on:
   push:
     branches: [main, initial]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read

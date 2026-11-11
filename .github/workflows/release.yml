@@ -1,0 +1,56 @@
+# Packagist takes a version from its tag by itself, so nothing is uploaded here. When a GitHub Release is published, this
+# checks what Packagist cannot: that the tag is the version the code says, on a commit of the default branch, and that
+# the tests pass on it. Packagist skips, without a word, a tag that differs from `version` in composer.json.
+# RELEASING.md has the steps.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: The tag is this version, on the default branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          TAG: ${{ github.event.release.tag_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          version=$(jq -r .version composer.json)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The release tag is $TAG and composer.json says $version: the tag must be v$version."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::$TAG is not on $DEFAULT_BRANCH: a release is cut from reviewed code only."
+            exit 1
+          fi
+
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  packagist:
+    name: Packagist has the version
+    needs: [version, checks]
+    runs-on: ubuntu-latest
+    steps:
+      # Packagist hears of the tag from GitHub and needs a moment to read it.
+      - env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          for _ in $(seq 1 20); do
+            if curl -fsS https://repo.packagist.org/p2/braskai/rask-sdk.json | jq -e --arg tag "$TAG" '.packages["braskai/rask-sdk"] | any((.version | ltrimstr("v")) == ($tag | ltrimstr("v")))' > /dev/null; then
+              echo "Packagist lists braskai/rask-sdk $TAG."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Packagist does not list braskai/rask-sdk $TAG. Is the package submitted there, with its GitHub hook on?"
+          exit 1
