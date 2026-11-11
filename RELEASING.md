@@ -1,20 +1,22 @@
 # Releasing
 
-Packagist takes a version from its tag by itself. A release is a GitHub Release.
+Packagist takes a version from its tag by itself. A release is one run of the `Release` workflow, which makes the tag
+only after the checks pass.
 
 1. In a pull request, set the new version in `composer.json` and `src/Core/Version.php` (a test keeps them equal).
    Merge it.
-2. Publish a GitHub Release whose tag is `v` plus that version. Without `--target`, the tag goes on the default branch:
+2. Start the workflow on the default branch, with "Run workflow" on the Actions tab or from a terminal:
 
    ```sh
-   gh release create v3.0.0-alpha.1 --generate-notes --prerelease
+   gh workflow run release.yml
    ```
 
-3. Packagist reads the tag within a minute or two. The `Release` workflow checks what Packagist cannot: that the tag is
-   the version in `composer.json`, on the default branch, and that the tests pass on it. Then it waits until Packagist
-   lists the version.
+3. The workflow runs the CI checks, tags the commit `v` plus the version and makes the GitHub Release. Packagist reads
+   the tag within a minute or two, and the workflow waits until Packagist lists the version.
 
-Packagist skips, without a word, a tag that differs from `version` in `composer.json`: the workflow fails on it instead.
+The workflow refuses to run from any other branch, and refuses a version that is already tagged.
+Do not push a version tag by hand: Packagist takes any tag, checked or not, and skips, without a word, one that differs
+from `version` in `composer.json`.
 A version already installed somewhere should not change: to fix one, release the next.
 
 ## Set up once
