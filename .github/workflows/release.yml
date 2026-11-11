@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - env:
           TAG: ${{ github.event.release.tag_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -46,7 +47,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           for _ in $(seq 1 20); do
-            if curl -fsS https://repo.packagist.org/p2/braskai/rask-sdk.json | jq -e --arg tag "$TAG" '.packages["braskai/rask-sdk"] | any((.version | ltrimstr("v")) == ($tag | ltrimstr("v")))' > /dev/null; then
+            if curl -fsS --max-time 20 https://repo.packagist.org/p2/braskai/rask-sdk.json | jq -e --arg tag "$TAG" '.packages["braskai/rask-sdk"] | any((.version | ltrimstr("v")) == ($tag | ltrimstr("v")))' > /dev/null; then
               echo "Packagist lists braskai/rask-sdk $TAG."
               exit 0
             fi
