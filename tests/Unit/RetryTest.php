@@ -186,6 +186,55 @@ final class RetryTest extends TestCase
         $this->assertSame($http->requests[0]->getHeaderLine('Idempotency-Key'), $folder->idempotencyKey());
     }
 
+    /** @return iterable<string, array{int, string}> */
+    public static function certificateFailures(): iterable
+    {
+        yield 'whatever is wrong with it, on libcurl from 7.62' => [60, 'SSL certificate problem: self-signed certificate'];
+        yield 'another host name, on libcurl before 7.62' => [51, "SSL: no alternative certificate subject name matches target host name '127.0.0.1'"];
+    }
+
+    /**
+     * The certificate is the same on every attempt. CertificateTest gets 60 from a real endpoint; 51 is what Guzzle
+     * reports on libcurl 7.52 for a certificate for another host name, and the PHP that runs these tests has a later
+     * libcurl, so here both are made by hand.
+     */
+    #[DataProvider('certificateFailures')]
+    public function testACertificateThatFailsVerificationIsNotRetried(int $errno, string $error): void
+    {
+        $http = new FakeHttpClient([FakeHttpClient::curlError($errno, $error), FakeHttpClient::json(201, ['id' => 'f'])]);
+        try {
+            $http->client([], $sleeps)->projects->createFolder(['name' => 'x'], ['idempotency_key' => 'mine']);
+            $this->fail('Must raise.');
+        } catch (ConnectionError $e) {
+            $this->assertSame(ConnectionError::class, $e::class);
+            $this->assertStringContainsString("cURL error $errno: $error", $e->getMessage());
+            $this->assertSame('mine', $e->idempotency_key);
+        }
+        $this->assertCount(1, $http->requests);
+        $this->assertSame([], $sleeps);
+    }
+
+    /** @return iterable<string, array{\Throwable}> */
+    public static function failuresThatMayPass(): iterable
+    {
+        yield 'no connection' => [FakeHttpClient::curlError(7, 'Failed to connect to gw.example.com port 443')];
+        yield 'a TLS handshake that broke' => [FakeHttpClient::curlError(35, 'Recv failure: Connection reset by peer')];
+        yield 'a connection reset in mid-answer' => [FakeHttpClient::curlError(56, 'Recv failure: Connection reset by peer')];
+        yield 'a code this SDK does not know' => [FakeHttpClient::curlError(999, 'Something new')];
+        yield 'no code, as from Guzzle without cURL' => [FakeHttpClient::connectionLost('Connection refused for URI https://gw.example.com/rask/v3/me')];
+        yield 'no code, as from another client, whatever its words' => [new \RuntimeException('SSL certificate problem: self-signed certificate')];
+    }
+
+    /** Only cURL's code makes a failure final. Whatever the SDK does not recognise by it may pass, and is retried. */
+    #[DataProvider('failuresThatMayPass')]
+    public function testAnyOtherConnectionFailureIsStillRetried(\Throwable $failure): void
+    {
+        $http = new FakeHttpClient([$failure, FakeHttpClient::json(200, ['id' => 'me'])]);
+        $this->assertSame('me', $http->client([], $sleeps)->account->getMe()['id']);
+        $this->assertCount(2, $http->requests);
+        $this->assertCount(1, $sleeps);
+    }
+
     public function testErrorsCarryTheKeyWhenTheNetworkFails(): void
     {
         $http = new FakeHttpClient(array_fill(0, 100, FakeHttpClient::connectionLost()));

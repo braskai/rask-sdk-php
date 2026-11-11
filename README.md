@@ -116,7 +116,10 @@ variant is a `Model\UnknownVariant`, and `toArray()`, `get('/a/b')` and `$model[
 `JobCanceledError` and `WaitTimeoutError`. A call that was wrong before it left raises `UsageError`.
 
 **Retries:** 429, 502, 503, 504, connection errors and timeouts, up to 120 s in all, honouring `Retry-After`. A wait that
-cannot fit in the 120 s ends the retries at once. 500 and state conflicts are not retried.
+cannot fit in the 120 s ends the retries at once. 500 and state conflicts are not retried. Neither is a certificate that
+fails verification: the call raises `ConnectionError` at once, and so does `jobs->wait()`. The SDK knows it by cURL's
+error code, so that takes Guzzle on the cURL extension: without cURL Guzzle reports such a certificate as a refused
+connection, and that is retried like any other, as is whatever another `http_client` reports.
 
 ## Develop
 

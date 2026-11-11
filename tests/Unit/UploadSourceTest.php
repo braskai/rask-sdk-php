@@ -207,6 +207,16 @@ final class UploadSourceTest extends TestCase
         $this->assertCount(2, $http->requests);
     }
 
+    /** A connection that fails may work on the next attempt. A certificate will not: CertificateTest has that one. */
+    public function testAPutThatGotNoAnswerIsRepeated(): void
+    {
+        $http = new FakeHttpClient([self::created(), FakeHttpClient::connectionLost(), new Response(200), FakeHttpClient::json(202, ['id' => 'job-1'])]);
+        $job = $http->client([], $sleeps)->uploads->uploadFile($this->file('a.mp4', 'bytes'));
+        $this->assertSame('job-1', $job->id);
+        $this->assertCount(1, $sleeps);
+        $this->assertCount(4, $http->requests);
+    }
+
     public function testAStorageRetryAfterWithinTheBudgetIsHonoured(): void
     {
         $http = new FakeHttpClient([self::created(), new Response(503, ['Retry-After' => '45']), new Response(200), FakeHttpClient::json(202, [])]);

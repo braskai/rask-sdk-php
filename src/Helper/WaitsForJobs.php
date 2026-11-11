@@ -27,7 +27,7 @@ trait WaitsForJobs
      * @throws JobFailedError carrying the job's Problem
      * @throws JobCanceledError
      * @throws WaitTimeoutError
-     * @throws RaskError when the job cannot be read, as a 404 or a 401
+     * @throws RaskError when the job cannot be read, as a 404, a 401 or a certificate that fails verification
      */
     public function wait(string $jobId, int|float $timeoutSeconds = self::DEFAULT_WAIT_TIMEOUT_SECONDS): Job
     {
@@ -66,8 +66,11 @@ trait WaitsForJobs
                 if ($error instanceof JobFailedError || $error instanceof JobCanceledError) {
                     throw $error;
                 }
-                // Transport spent its 120 s budget on an outage. A wait of hours outlives that.
-                if (!$error instanceof ConnectionError && !in_array($error->status, Transport::RETRY_STATUSES, true)) {
+                // Transport spent its 120 s budget on an outage. A wait of hours outlives that. What Transport does not
+                // retry is the same on the next poll: taken for an outage, it would come back when the wait ran out,
+                // as a timeout without its cause.
+                $outage = $error instanceof ConnectionError ? $error->mayPass() : in_array($error->status, Transport::RETRY_STATUSES, true);
+                if (!$outage) {
                     throw $error;
                 }
                 if ($this->transport->now() >= $deadline) {

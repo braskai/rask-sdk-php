@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Rask\Sdk\Internal;
 
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
@@ -34,6 +36,12 @@ final class Transport
     private const OPTION_NAMES = ['if_match', 'if_none_match', 'idempotency_key'];
     private const MAX_KEY_IN_USE_RETRIES = 3;
     private const MAX_REDIRECTS = 5;
+
+    /**
+     * cURL's codes for a certificate that fails verification: self-signed, of an unknown issuer, expired, or for another
+     * host name. libcurl gives 60 for all of them; before 7.62 it gave 51 for the host name.
+     */
+    private const CERTIFICATE_ERRNOS = [51, 60];
 
     private readonly string $userAgent;
 
@@ -132,6 +140,10 @@ final class Transport
             try {
                 $response = $this->exchange($method, $url, $headers, $payload, $key, true);
             } catch (ConnectionError $error) {
+                // The next attempt would fail the same way: a retry would only report it later.
+                if (!$error->mayPass()) {
+                    throw $error;
+                }
                 $this->waitForRetry($error, self::backoff($attempt), $started, $operationId, $attempt);
                 continue;
             }
@@ -191,7 +203,12 @@ final class Transport
                 $psrResponse = $http->sendRequest($request);
                 $text = (string) $psrResponse->getBody();
             } catch (ClientExceptionInterface | \RuntimeException $e) {
-                throw self::connectionError(Redact::message($e->getMessage(), $this->config->apiKey), $method, $url, $key);
+                // Only cURL's code tells a certificate from an outage, and only Guzzle on cURL has one. Without cURL
+                // Guzzle calls every failure to connect a refused connection, and another client has its own words.
+                // What is not recognised may pass: when in doubt, it is retried.
+                $mayPass = !(($e instanceof RequestException || $e instanceof ConnectException)
+                    && in_array($e->getHandlerContext()['errno'] ?? null, self::CERTIFICATE_ERRNOS, true));
+                throw self::connectionError(Redact::message($e->getMessage(), $this->config->apiKey), $mayPass, $method, $url, $key);
             }
             $response = new RawResponse($psrResponse->getStatusCode(), self::flatHeaders($psrResponse), $text, $key);
             $this->config->log->write(sprintf(
@@ -233,12 +250,12 @@ final class Transport
         }
     }
 
-    private static function connectionError(string $message, string $method, #[\SensitiveParameter] string $url, ?string $key): ConnectionError
+    private static function connectionError(string $message, bool $mayPass, string $method, #[\SensitiveParameter] string $url, ?string $key): ConnectionError
     {
         $isTimeout = str_contains($message, 'cURL error 28') || stripos($message, 'timed out') !== false;
         $text = sprintf('%s %s failed: %s', $method, Redact::url($url), $message);
         // The client's exception is not chained: it holds the request, Authorization header included.
-        return $isTimeout ? new TimeoutError($text, 0, null, null, $key) : new ConnectionError($text, 0, null, null, $key);
+        return $isTimeout ? new TimeoutError($text, 0, null, null, $key) : new ConnectionError($text, 0, null, null, $key, null, $mayPass);
     }
 
     private static function sameOrigin(UriInterface $a, UriInterface $b): bool

@@ -21,7 +21,8 @@ trait UploadsFiles
      * Uploads a file in one call: createUpload, one presigned PUT, completeUpload.
      *
      * The PUT goes to the URL the API signed, with the signed headers and without Authorization. It is retried whole, up
-     * to 3 times, unless storage asks for a wait of over 120 s; a URL that expired is re-signed through getUpload.
+     * to 3 times, unless storage asks for a wait of over 120 s or its certificate fails verification; a URL that expired
+     * is re-signed through getUpload.
      *
      * @param string|resource|StreamInterface $source a path, a stream resource or a PSR-7 stream. The stream stays open.
      * @param array{
@@ -93,7 +94,9 @@ trait UploadsFiles
                 continue;
             }
             ++$failures;
-            $transient = $response === null || in_array($response->status, [408, 429, 500, 502, 503, 504], true);
+            // No answer is worth another PUT unless the next one would fail the same way: storage's certificate, like
+            // the API's, is the same on every attempt.
+            $transient = $failure?->mayPass() ?? in_array($response?->status, [408, 429, 500, 502, 503, 504], true);
             $wait = max(Transport::backoff($failures), (float) ($response?->retryAfter() ?? 0));
             // Storage names its own wait and nothing else bounds it, so one past the budget of an API call ends the
             // retries here as it does there.

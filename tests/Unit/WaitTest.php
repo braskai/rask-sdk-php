@@ -183,6 +183,19 @@ final class WaitTest extends TestCase
         $this->assertGreaterThan(120, array_sum($sleeps));
     }
 
+    /**
+     * Nor does a connection that keeps failing for as long. Only a failure that no retry mends ends the wait, and
+     * CertificateTest has that one.
+     */
+    public function testConnectionsThatFailForLongerThanTheRetryBudgetDoNotEndTheWait(): void
+    {
+        $http = new FakeHttpClient([...array_fill(0, 40, FakeHttpClient::connectionLost()), self::job('succeeded')]);
+        $job = $http->client([], $sleeps)->jobs->wait('j');
+        $this->assertSame('succeeded', $job->status);
+        $this->assertGreaterThan(120, array_sum($sleeps));
+        $this->assertCount(41, $http->requests);
+    }
+
     public function testAnOutagePastTheDeadlineEndsAsATimeout(): void
     {
         $http = new FakeHttpClient(array_fill(0, 40, new Response(503, ['Retry-After' => '30'])));
