@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Rask\Sdk\Tests\Unit;
 
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\StreamDecoratorTrait;
 use GuzzleHttp\Psr7\Utils;
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\StreamInterface;
 use Rask\Sdk\Exception\UploadError;
 use Rask\Sdk\Exception\UsageError;
 use Rask\Sdk\Helper\UploadSource;
@@ -115,6 +117,70 @@ final class UploadSourceTest extends TestCase
         pclose($pipe);
     }
 
+    /** A stream may say it seeks and then fail to. It is copied like a pipe, and the caller's stream stays open. */
+    public function testAResourceThatSaysItSeeksAndCannotIsSpooledSoItCanBeRetried(): void
+    {
+        stream_wrapper_register('rask-unseekable', UnseekableStreamWrapper::class);
+        try {
+            $stream = fopen('rask-unseekable://bytes', 'rb');
+            $this->assertTrue(stream_get_meta_data($stream)['seekable']);
+            $source = UploadSource::from($stream, ['filename' => 'a.mp4', 'content_type' => 'video/mp4']);
+            $this->assertSame(5, $source->size);
+            $this->assertSame('bytes', (string) $source->stream);
+            $this->assertSame('bytes', (string) $source->stream);
+            $source->release();
+            $this->assertTrue(is_resource($stream));
+            fclose($stream);
+        } finally {
+            stream_wrapper_unregister('rask-unseekable');
+        }
+    }
+
+    /** Spooled from where it stands, such a stream would upload a file without its beginning, and say nothing. */
+    public function testAStreamThatCannotGoBackAndWasReadFromIsRefused(): void
+    {
+        stream_wrapper_register('rask-unseekable', UnseekableStreamWrapper::class);
+        try {
+            $stream = fopen('rask-unseekable://bytes', 'rb');
+            $this->assertSame('by', fread($stream, 2));
+            try {
+                UploadSource::from($stream, ['filename' => 'a.mp4', 'content_type' => 'video/mp4']);
+                $this->fail('A stream without its first bytes was taken.');
+            } catch (UsageError $error) {
+                $this->assertStringContainsString('already been read from', $error->getMessage());
+            }
+            // A refusal leaves the caller's stream open and where it was.
+            unset($error);
+            $this->assertTrue(is_resource($stream));
+            $this->assertSame('tes', fread($stream, 8));
+            fclose($stream);
+        } finally {
+            stream_wrapper_unregister('rask-unseekable');
+        }
+    }
+
+    /** The same from a PSR-7 stream, through a whole upload: storage fails the first PUT and gets the file again. */
+    public function testAPsr7StreamThatSaysItSeeksAndCannotIsSentWholeOnEveryAttempt(): void
+    {
+        $stream = new class (Utils::streamFor('bytes')) implements StreamInterface {
+            use StreamDecoratorTrait;
+
+            /** @var StreamInterface */
+            private $stream;
+
+            public function seek(int $offset, int $whence = SEEK_SET): void
+            {
+                throw new \RuntimeException('This stream does not seek after all.');
+            }
+        };
+        $this->assertTrue($stream->isSeekable());
+        $http = new FakeHttpClient([self::created(), new Response(503), new Response(200), FakeHttpClient::json(202, ['id' => 'job-1'])]);
+        $job = $http->client()->uploads->uploadFile($stream, ['filename' => 'a.mp4', 'content_type' => 'video/mp4']);
+        $this->assertSame('job-1', $job->id);
+        $this->assertSame(['PUT', 'PUT'], [$http->requests[1]->getMethod(), $http->requests[2]->getMethod()]);
+        $this->assertSame(['bytes', 'bytes'], [$http->bodies[1], $http->bodies[2]]);
+    }
+
     public function testAPsr7StreamStaysOpen(): void
     {
         $stream = Utils::streamFor('bytes');
@@ -144,6 +210,42 @@ final class UploadSourceTest extends TestCase
             $this->assertSame(403, $e->status);
             $this->assertCount(2, $http->requests);
         }
+    }
+
+    /**
+     * Nothing else bounds the wait that storage names. One past the 120 s of an API call ends the retries, as it does
+     * there.
+     */
+    public function testAStorageRetryAfterPastTheBudgetEndsTheUploadAtOnce(): void
+    {
+        $http = new FakeHttpClient([self::created(), new Response(503, ['Retry-After' => '86400']), new Response(200), FakeHttpClient::json(202, [])]);
+        try {
+            $http->client([], $sleeps)->uploads->uploadFile($this->file('a.mp4', 'bytes'));
+            $this->fail('Must raise.');
+        } catch (UploadError $e) {
+            $this->assertSame(503, $e->status);
+            $this->assertSame(86400, $e->retry_after);
+        }
+        $this->assertSame([], $sleeps);
+        $this->assertCount(2, $http->requests);
+    }
+
+    /** A connection that fails may work on the next attempt. A certificate will not: CertificateTest has that one. */
+    public function testAPutThatGotNoAnswerIsRepeated(): void
+    {
+        $http = new FakeHttpClient([self::created(), FakeHttpClient::connectionLost(), new Response(200), FakeHttpClient::json(202, ['id' => 'job-1'])]);
+        $job = $http->client([], $sleeps)->uploads->uploadFile($this->file('a.mp4', 'bytes'));
+        $this->assertSame('job-1', $job->id);
+        $this->assertCount(1, $sleeps);
+        $this->assertCount(4, $http->requests);
+    }
+
+    public function testAStorageRetryAfterWithinTheBudgetIsHonoured(): void
+    {
+        $http = new FakeHttpClient([self::created(), new Response(503, ['Retry-After' => '45']), new Response(200), FakeHttpClient::json(202, [])]);
+        $http->client([], $sleeps)->uploads->uploadFile($this->file('a.mp4', 'bytes'));
+        $this->assertSame([45.0], $sleeps);
+        $this->assertCount(4, $http->requests);
     }
 
     public function testThePutCarriesExactlyTheSignedHeadersAndNoKey(): void

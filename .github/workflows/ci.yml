@@ -1,10 +1,11 @@
-# Build, lint and test. Nothing here publishes.
+# Build, lint and test. Nothing here publishes: release.yml calls this for a release.
 name: CI
 
 on:
   push:
     branches: [main, initial]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -14,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
@@ -34,6 +37,8 @@ jobs:
         php: ['8.2', '8.3', '8.4', '8.5']
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -45,6 +50,7 @@ jobs:
       # The shared acceptance harness is its own repository.
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: braskai/rask-sdk-acceptance
           path: .harness
       - run: composer install --no-interaction --no-progress

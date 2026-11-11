@@ -1,0 +1,81 @@
+# Packagist takes a version from its tag by itself, so nothing is uploaded here. This checks the default branch, tags the
+# version in composer.json, makes the GitHub Release, and waits until Packagist lists the version.
+# Started by hand and only from the default branch: `gh workflow run release.yml`, or "Run workflow" on the Actions tab.
+# So the tag appears only after the checks pass, and it is always the version composer.json says: Packagist skips,
+# without a word, a tag that differs from it. RELEASING.md has the steps.
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Tag the version
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the GitHub Release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Only from the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::A release is cut from $DEFAULT_BRANCH, and this run is on $GITHUB_REF_NAME."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The version is new
+        id: version
+        run: |
+          version=$(jq -r .version composer.json)
+          tagged=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null || tagged=$?
+          if [ "$tagged" != 2 ]; then
+            echo "::error::v$version is already tagged, or that could not be checked (tag lookup $tagged, where 2 means no tag). Set the next version in composer.json and src/Core/Version.php first."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Tag the version and make the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -- "v$VERSION" --target "$GITHUB_SHA" --generate-notes
+          case "$VERSION" in *-*) set -- "$@" --prerelease ;; esac
+          gh release create "$@"
+
+  # A job of its own, so that it can be run again by itself: a second run of the job above stops at the tag it made.
+  packagist:
+    name: Packagist has the version
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      # Packagist hears of the tag from GitHub and needs a moment to read it.
+      - env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          for _ in $(seq 1 20); do
+            if curl -fsS --max-time 20 https://repo.packagist.org/p2/braskai/rask-sdk.json | jq -e --arg version "$VERSION" '.packages["braskai/rask-sdk"] | any((.version | ltrimstr("v")) == $version)' > /dev/null; then
+              echo "Packagist lists braskai/rask-sdk $VERSION."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Packagist does not list braskai/rask-sdk $VERSION. Is the package submitted there, with its GitHub hook on?"
+          exit 1

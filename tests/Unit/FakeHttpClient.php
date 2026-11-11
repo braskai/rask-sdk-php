@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Rask\Sdk\Tests\Unit;
 
 use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Psr\Http\Client\ClientInterface;
@@ -49,6 +50,20 @@ final class FakeHttpClient implements ClientInterface
     public static function connectionLost(string $message = 'cURL error 7: Failed to connect'): ConnectException
     {
         return new ConnectException($message, new Request('GET', 'http://unused.example/'));
+    }
+
+    /**
+     * A failure of cURL as Guzzle's handler raises it: the code is in the message and in the handler context, and
+     * Guzzle has its connection exception for five of the codes only.
+     */
+    public static function curlError(int $errno, string $error): ConnectException|RequestException
+    {
+        $request = new Request('GET', 'http://unused.example/');
+        $message = "cURL error $errno: $error (see https://curl.se/libcurl/c/libcurl-errors.html) for http://unused.example/";
+        $context = ['errno' => $errno, 'error' => $error];
+        return in_array($errno, [6, 7, 28, 35, 52], true)
+            ? new ConnectException($message, $request, null, $context)
+            : new RequestException($message, $request, null, null, $context);
     }
 
     /**

@@ -21,4 +21,10 @@
             <directory>src</directory>
         </include>
     </source>
+    <php>
+        <!-- As on a server, where an exception does not keep the arguments of its trace alive. Left at the
+             development default, a caught exception holds every stream on its trace open, and a test passes that
+             fails anywhere else. -->
+        <ini name="zend.exception_ignore_args" value="1"/>
+    </php>
 </phpunit>

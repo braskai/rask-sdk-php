@@ -3,7 +3,7 @@
 The Rask API v3 from PHP 8.2 or newer: all 82 operations, grouped by resource and named after their `operationId`, plus
 retries, idempotency keys, auto-paging, `jobs->wait()` and `uploads->uploadFile()`.
 
-Version 3.0.0-alpha.0, not published yet.
+Version 3.0.0-alpha.0, on [Packagist](https://packagist.org/packages/braskai/rask-sdk).
 
 ## Install
 
@@ -62,7 +62,11 @@ try {
     // Download. Output URLs are presigned: no key goes with them.
     foreach ($rask->exports->listProjectOutputs((string) $processed->project_id) as $output) {
         if ($output->kind === OutputKind::DUBBED_VIDEO && $output->url !== null) {
-            copy($output->url, 'dubbed.mp4');
+            // copy() answers false when storage refuses, as it does once the URL has expired.
+            if (!copy($output->url, 'dubbed.mp4')) {
+                echo "The download failed.\n";
+                exit(1);
+            }
             echo "Saved dubbed.mp4\n";
         }
     }
@@ -112,7 +116,10 @@ variant is a `Model\UnknownVariant`, and `toArray()`, `get('/a/b')` and `$model[
 `JobCanceledError` and `WaitTimeoutError`. A call that was wrong before it left raises `UsageError`.
 
 **Retries:** 429, 502, 503, 504, connection errors and timeouts, up to 120 s in all, honouring `Retry-After`. A wait that
-cannot fit in the 120 s ends the retries at once. 500 and state conflicts are not retried.
+cannot fit in the 120 s ends the retries at once. 500 and state conflicts are not retried. Neither is a certificate that
+fails verification: the call raises `ConnectionError` at once, and so does `jobs->wait()`. The SDK knows it by cURL's
+error code, so that takes Guzzle on the cURL extension: without cURL Guzzle reports such a certificate as a refused
+connection, and that is retried like any other, as is whatever another `http_client` reports.
 
 ## Develop
 

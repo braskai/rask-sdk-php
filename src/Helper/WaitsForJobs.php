@@ -27,7 +27,7 @@ trait WaitsForJobs
      * @throws JobFailedError carrying the job's Problem
      * @throws JobCanceledError
      * @throws WaitTimeoutError
-     * @throws RaskError when the job cannot be read, as a 404 or a 401
+     * @throws RaskError when the job cannot be read, as a 404, a 401 or a certificate that fails verification
      */
     public function wait(string $jobId, int|float $timeoutSeconds = self::DEFAULT_WAIT_TIMEOUT_SECONDS): Job
     {
@@ -38,8 +38,9 @@ trait WaitsForJobs
         $etag = null;
         $last = null;
         while (true) {
-            // Long-poll for 20 s, except where that would hold the request past the deadline.
-            $hold = min(20, max(0, (int) ceil($deadline - $this->transport->now())));
+            // Long-poll for 20 s, except where that would hold the request past the deadline. Capped while it is a
+            // float: the time left under a timeout such as INF does not convert to an int.
+            $hold = (int) min(20, max(0, ceil($deadline - $this->transport->now())));
             $delay = 1.0;
             try {
                 $job = $this->getJob($jobId, ['wait_seconds' => $hold], $etag === null ? [] : ['if_none_match' => $etag]);
@@ -60,8 +61,16 @@ trait WaitsForJobs
                 }
                 $delay = (float) ($response?->retryAfter() ?? 1);
             } catch (RaskError $error) {
-                // Transport spent its 120 s budget on an outage. A wait of hours outlives that.
-                if (!$error instanceof ConnectionError && !in_array($error->status, Transport::RETRY_STATUSES, true)) {
+                // The job's own end is no outage, whatever status its problem carries: a finished job answers the same
+                // on every poll.
+                if ($error instanceof JobFailedError || $error instanceof JobCanceledError) {
+                    throw $error;
+                }
+                // Transport spent its 120 s budget on an outage. A wait of hours outlives that. What Transport does not
+                // retry is the same on the next poll: taken for an outage, it would come back when the wait ran out,
+                // as a timeout without its cause.
+                $outage = $error instanceof ConnectionError ? $error->mayPass() : in_array($error->status, Transport::RETRY_STATUSES, true);
+                if (!$outage) {
                     throw $error;
                 }
                 if ($this->transport->now() >= $deadline) {

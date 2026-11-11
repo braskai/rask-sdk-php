@@ -199,6 +199,32 @@ final class WireTest extends TestCase
         $this->assertArrayNotHasKey('authorization', $other[0]['headers']);
     }
 
+    /** The real default client: Guzzle refuses a Location without a host before it reaches the network. */
+    public function testARedirectGuzzleRefusesToRequestIsRefusedWithoutARetry(): void
+    {
+        $this->harness->post('/script', ['operationId' => 'getMe', 'steps' => [['redirect' => ['to' => 'http:/x', 'status' => 307], 'repeat' => 'forever']]]);
+        $now = 0.0;
+        $sleeps = 0;
+        $rask = $this->rask([
+            'clock' => static function () use (&$now): float {
+                return $now;
+            },
+            'sleeper' => static function (int|float $seconds) use (&$now, &$sleeps): void {
+                $now += $seconds;
+                ++$sleeps;
+            },
+        ]);
+        try {
+            $rask->account->getMe();
+            $this->fail('Must raise.');
+        } catch (RaskError $e) {
+            $this->assertInstanceOf(\Rask\Sdk\Exception\UnexpectedResponseError::class, $e);
+            $this->assertSame(307, $e->status);
+        }
+        $this->assertSame(0, $sleeps);
+        $this->assertCount(1, $this->harness->requests());
+    }
+
     /** The real default client and its timeout: the harness holds the answer longer than timeout_seconds. */
     public function testATimeoutIsRaisedAsTimeoutErrorOnTheDefaultClient(): void
     {
@@ -270,10 +296,13 @@ final class WireTest extends TestCase
         $this->assertMatchesRegularExpression('/^deleteFolder\s+status=204/m', $stdout);
     }
 
-    /** The README's worked example, run: upload, createProject, jobs.wait, download. */
-    public function testQuickstartProgramAndItsCopyInTheReadme(): void
+    /**
+     * Runs examples/quickstart.php in a directory of its own, against a project whose dubbed video is at $url.
+     *
+     * @return array{int, string, string, bool} exit code, stdout, stderr, and whether dubbed.mp4 is there
+     */
+    private function quickstart(string $url): array
     {
-        $other = $this->health['other_base_url'];
         $this->harness->post('/jobs', ['id' => 'job-import', 'type' => 'media_import', 'states' => ['running', 'succeeded'], 'retry_after' => 1]);
         $this->harness->post('/jobs', ['id' => 'job-processing', 'type' => 'project_processing', 'states' => ['succeeded']]);
         $this->harness->post('/script', ['operationId' => 'completeUpload', 'steps' => [['job' => 'job-import']]]);
@@ -294,7 +323,7 @@ final class WireTest extends TestCase
                     'unavailable_reason' => null,
                     'outdated' => false,
                     'version' => null,
-                    'url' => "$other/downloads/dubbed.mp4?X-Amz-Signature=abc",
+                    'url' => $url,
                     'expires_at' => '2030-01-01T00:00:00Z',
                     'subtitles_request' => null,
                     'filename' => 'dubbed.mp4',
@@ -311,12 +340,19 @@ final class WireTest extends TestCase
                 'RASK_API_KEY' => $this->health['test_api_key'],
                 'RASK_BASE_URL' => $this->health['base_url'],
             ], ["$dir/talk.mp4"], $dir);
-            $this->assertSame(0, $code, $stdout . $stderr);
-            $this->assertStringContainsString('Saved dubbed.mp4', $stdout);
-            $this->assertFileExists("$dir/dubbed.mp4");
+            return [$code, $stdout, $stderr, file_exists("$dir/dubbed.mp4")];
         } finally {
             exec('rm -rf ' . escapeshellarg($dir));
         }
+    }
+
+    /** The README's worked example, run: upload, createProject, jobs.wait, download. */
+    public function testQuickstartProgramAndItsCopyInTheReadme(): void
+    {
+        [$code, $stdout, $stderr, $saved] = $this->quickstart($this->health['other_base_url'] . '/downloads/dubbed.mp4?X-Amz-Signature=abc');
+        $this->assertSame(0, $code, $stdout . $stderr);
+        $this->assertStringContainsString('Saved dubbed.mp4', $stdout);
+        $this->assertTrue($saved);
 
         $requests = $this->harness->requests();
         $order = array_column(array_filter($requests, static fn (array $r): bool => $r['listener'] === 'api' || $r['operationId'] === '__storage_put'), 'operationId');
@@ -336,6 +372,15 @@ final class WireTest extends TestCase
         $readme = (string) file_get_contents(dirname(__DIR__, 2) . '/README.md');
         $body = (string) file_get_contents(dirname(__DIR__, 2) . '/examples/quickstart.php');
         $this->assertStringContainsString($this->quickstartBody($body), $readme, 'The README copy of examples/quickstart.php has drifted.');
+    }
+
+    /** An output URL lives for an hour. The API answers 401 here, as storage answers 403 once the URL has expired. */
+    public function testQuickstartProgramDoesNotSaySavedWhenTheDownloadFailed(): void
+    {
+        [$code, $stdout, , $saved] = $this->quickstart($this->health['base_url'] . '/me');
+        $this->assertFalse($saved);
+        $this->assertStringNotContainsString('Saved', $stdout);
+        $this->assertSame(1, $code, $stdout);
     }
 
     private function quickstartBody(string $source): string

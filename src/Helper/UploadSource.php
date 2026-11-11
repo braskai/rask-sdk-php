@@ -10,8 +10,8 @@ use Psr\Http\Message\StreamInterface;
 use Rask\Sdk\Exception\UsageError;
 
 /**
- * What uploads->uploadFile() takes, as a rewindable stream of known size. A whole-file retry needs both, so a pipe or a
- * socket is spooled to a temp file first.
+ * What uploads->uploadFile() takes, as a rewindable stream of known size. A whole-file retry needs both, so a pipe, a
+ * socket or any other stream that does not go back to its start is spooled to a temp file first.
  *
  * @internal
  */
@@ -93,7 +93,16 @@ final class UploadSource
 
     private static function measured(StreamInterface $stream, string $filename, string $contentType, bool $ownsStream, bool $ownsResource): self
     {
-        if (!$stream->isSeekable()) {
+        try {
+            $rewinds = self::rewinds($stream);
+        } catch (UsageError $error) {
+            // Let go of the caller's resource first: the wrapper made here closes what it holds when it is dropped.
+            if ($ownsStream && !$ownsResource) {
+                $stream->detach();
+            }
+            throw $error;
+        }
+        if (!$rewinds) {
             $spool = Utils::streamFor(fopen('php://temp/maxmemory:8388608', 'r+b'));
             Utils::copyToStream($stream, $spool);
             if ($ownsStream && !$ownsResource) {
@@ -117,6 +126,34 @@ final class UploadSource
             throw new UsageError("uploadFile: $filename is empty.");
         }
         return new self($stream, $size, $filename, $contentType, $ownsStream, $ownsResource);
+    }
+
+    /**
+     * A stream may say it seeks and then fail to: PHP says so of every stream of a user-space wrapper, whether or not
+     * the wrapper can seek. Such a stream is spooled like a pipe, as long as nothing has been read from it: one that
+     * has been read from cannot be sent from its start, and what is left of it would pass for the whole file.
+     */
+    private static function rewinds(StreamInterface $stream): bool
+    {
+        if (!$stream->isSeekable()) {
+            return false;
+        }
+        try {
+            // PHP warns of the seek that fails before the stream raises.
+            @$stream->rewind();
+            return true;
+        } catch (\RuntimeException) {
+            try {
+                $read = $stream->tell();
+            } catch (\RuntimeException) {
+                // A stream that cannot say where it is gets the benefit of the doubt, like a pipe.
+                $read = 0;
+            }
+            if ($read > 0) {
+                throw new UsageError('The stream does not go back to its start and has already been read from, so it cannot be uploaded whole.');
+            }
+            return false;
+        }
     }
 
     /** @param array<string, mixed> $params */
